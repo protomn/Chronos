@@ -32,7 +32,7 @@ namespace chronos::protocol
     * @brief: validate if given bytes match the expected magic bytes
     */
 
-    [[nodiscard]] constexpr bool validateBytes(std::array<uint8_t, 2> bytes) noexcept
+    [[nodiscard]] constexpr bool validateMagicBytes(std::array<uint8_t, 2> bytes) noexcept
     {
         return bytes == kMagicBytes;
     }
