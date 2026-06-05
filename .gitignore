@@ -67,3 +67,11 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+dist/
+*.so
+*.a
+__pycache__/
+*.pyc
+*.egg-info/
+.DS_Store
