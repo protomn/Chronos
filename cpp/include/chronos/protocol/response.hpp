@@ -26,6 +26,9 @@ namespace chronos::protocol
         InvalidRequest = 5
     };
 
+    ///@brief highest valid underlying value for status code, to be updated when adding more status codes
+    inline constexpr uint8_t kMaxStatusCode{static_cast<uint8_t>(StatusCode::InvalidRequest)};
+
     /**
     * @brief representation of outbound or inbound rpc response
     */
