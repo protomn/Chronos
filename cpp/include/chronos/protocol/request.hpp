@@ -48,7 +48,23 @@ namespace chronos::protocol
                     std::move(payload)
                 );
 
-                return Request(std::move(msg), std::move(method), request_deadline);
+                return Request(std::move(msg), std::move(method), std::move(request_deadline));
+            }
+
+            /**
+            * @brief static factory to reconstruct inbound request from wire data
+            * uses existing MessageID rather than generating a new one
+            */
+
+            [[nodiscard]] static Request reconstruct(
+                MessageID id,
+                std::string method,
+                std::vector<std::byte> payload,
+                FrameFlags flags = FrameFlags::None,
+                std::optional<std::chrono::steady_clock::time_point> req_deadline = std::nullopt)
+            {
+                Message msg(MessageType::Request, id, flags, std::move(payload));
+                return Request(std::move(msg), std::move(method), std::move(req_deadline));
             }
 
             /**

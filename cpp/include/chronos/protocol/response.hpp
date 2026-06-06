@@ -76,6 +76,26 @@ namespace chronos::protocol
             }
 
             /**
+            @brief static factory for reconstructing inbound Response from wire data
+            * uses existing MessageID
+            */
+
+            [[nodiscard]] static Response reconstruct(
+                MessageID id,
+                StatusCode code,
+                std::vector<std::byte> payload = {},
+                std::optional<std::string> err_msg = std::nullopt,
+                FrameFlags flags = FrameFlags::None)
+            {
+                MessageType type = (code == StatusCode::Ok)
+                                    ? MessageType::Response
+                                    : MessageType::Error;
+                
+                Message msg(type, id, flags, std::move(payload));
+                return Response(std::move(msg), std::move(err_msg), code);
+            }
+
+            /**
             * @brief helper to check if rpc call has succeeded
             */
 
