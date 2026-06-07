@@ -15,6 +15,7 @@
 #include <expected>
 #include <optional>
 #include <vector>
+#include <span>
 
 //posix socket includes
 #include <sys/socket.h>
@@ -124,11 +125,28 @@ namespace chronos::transport
                 if (ring_.readable() < total_frame_size)
                     return std::nullopt;
 
+                if (total_frame_size <= ring_.readableContiguous())
+                {
+                    //hot path
+                    //create a zero-copy view directly pointing to the buffer's live memory
+                    //decoder parses header in place and copies payload exactly once to returning
+                    //Frame's vector
+                    //then consume bytes from ring buffer once processing's finished
+                    std::span<const std::byte> frame_view(ring_.readableData(), total_frame_size);
+                    auto decode_result = protocol::FrameDecoder::decode(frame_view);
+                    ring_.skip(total_frame_size);
+                    return decode_result;
+                }
+                
+                //cold path
                 //extract full frame into contiguous buffer for the decoder
-                std::vector<std::byte> frame_data(total_frame_size);
-                ring_.read(frame_data.data(), total_frame_size);
+                std::vector<std::byte> frame_data(total_frame_size); //frame straddles the circular wrap around boundary
 
-                return protocol::FrameDecoder::decode(frame_data);
+                if (!ring_.peek(frame_data.data(), total_frame_size)) return std::nullopt;
+                    
+                auto decode_result = protocol::FrameDecoder::decode(frame_data);
+                ring_.skip(total_frame_size);
+                return decode_result;
             }
 
         private:
