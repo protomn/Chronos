@@ -131,6 +131,27 @@ namespace chronos::transport
             }
 
             /**
+            * @brief return a raw pointer to the current read position
+            * prses data directly out of the bufferr without copying
+            */
+
+            [[nodiscard]] const std::byte *readableData() const noexcept
+            {
+                return buffer_.data() + (read_posn_ & mask_);
+            }
+
+            /**
+            * @brief return how many bytes can be read sequentially without wrapping
+            * determines contiguity for readableData()
+            */
+
+            [[nodiscard]] size_t readableContiguous() const noexcept
+            {
+                const size_t offset = read_posn_ & mask_;
+                return std::min(readable(), capacity_ - offset);
+            }
+
+            /**
             * @brief returns a raw pointer to the current write position
             * for receiving data from kernel sockets, say via recv()
             * caller must not write more than writeableContiguous() bytes
