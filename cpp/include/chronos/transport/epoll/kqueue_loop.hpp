@@ -39,7 +39,7 @@ namespace chronos::transport
                 EV_SET(&wake_event, 0, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, nullptr);
 
                 if (::kevent(kq_.get(), &wake_event, 1, nullptr, 0, nullptr) == -1)
-                    std::system_error(errno, std::generic_category(), "failed to register kqueue user event.");
+                    throw std::system_error(errno, std::generic_category(), "failed to register kqueue user event.");
             }
 
             /**

@@ -95,7 +95,7 @@ namespace chronos::transport
                         if (fd == wakeup_fd_.get())
                         {
                             uint64_t val{};
-                            if (::read(wakeup_fd_.get(), &val, sizeof(val)) == -1);
+                            if (::read(wakeup_fd_.get(), &val, sizeof(val)) == -1)
                             {
                                 if (errno != EAGAIN && errno != EWOULDBLOCK)
                                     throw std::system_error(errno, std::generic_category(), "failed to read eventfd wakeup token");

@@ -8,7 +8,6 @@
 #include <stdexcept>
 #include <span>
 
-#include <string>
 #include <sys/socket.h>
 #include <sys/types.h>
 
@@ -73,7 +72,7 @@ namespace chronos::transport
                 //if the frame is physically bigger than the entire ring, it is impossible to ever send
                 if (data.size() > ring_.capacity())
                     throw std::invalid_argument("oversized frame submitted to SendBuffer; frame size (" +
-                                                std::to_string(data.size()) + ") exceeds maximum capacity (" +
+                                                std::to_string(data.size()) + ") exceeds maximum capacity " +
                                                 std::to_string(ring_.capacity()));
 
                 return ring_.write(data.data(), data.size());
