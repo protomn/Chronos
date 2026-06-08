@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <vector>
 #include <stdexcept>
+#include <system_error>
 
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
@@ -26,24 +27,29 @@ namespace chronos::transport
                 : epoll_fd_(::epoll_create1(EPOLL_CLOEXEC)),
                   wakeup_fd_(::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC))
             {
-                if (!epoll_fd_.isValid() || !wakeup_fd_.isValid())
-                    throw std::runtime_error("failed to initialize epoll/eventfd");
+                if (!epoll_fd_.isValid())
+                    throw std::system_error(errno, std::generic_category(), "failed to create epoll instance.");
+                if (!wakeup_fd_.isValid())
+                    throw std::system_error(errno, std::generic_category(), "failed to create eventfd instance.");
 
                 //register eventfd and wake up the loop
                 struct epoll_event ev{};
                 ev.events = EPOLLIN;
                 ev.data.fd = wakeup_fd_.get();
-                ::epoll_ctl(epoll_fd_.get(), EPOLL_CTL_ADD, wakeup_fd_.get(), &ev);
+
+                if (::epoll_ctl(epoll_fd_.get(), EPOLL_CTL_ADD, wakeup_fd_.get(), &ev) == -1)
+                    throw std::system_error(errno, std::generic_category(), "failed to register eventfd with epoll.");
             }
 
             void add(int fd, EventFlags events, EventCallback cb)
             {
-                callbacks_[fd] = std::move(cb);
-
                 struct epoll_event ev{};
                 ev.events = mapFlags(events);
                 ev.data.fd = fd;
-                ::epoll_ctl(epoll_fd_.get(), EPOLL_CTL_ADD, fd, &ev);
+                if (::epoll_ctl(epoll_fd_.get(), EPOLL_CTL_ADD, fd, &ev) == -1)
+                    throw std::system_error(errno, std::generic_category(), "epoll_ctl add failure for fd " + std::to_string(fd));
+
+                callbacks_[fd] = std::move(cb);
             }
 
             void modify(int fd, EventFlags events)
@@ -51,13 +57,20 @@ namespace chronos::transport
                 struct epoll_event ev{};
                 ev.events = mapFlags(events);
                 ev.data.fd = fd;
-                ::epoll_ctl(epoll_fd_.get(), EPOLL_CTL_MOD, fd, &ev);
+                if (::epoll_ctl(epoll_fd_.get(), EPOLL_CTL_MOD, fd, &ev) == -1)
+                    throw std::system_error(errno, std::generic_category(), "epoll_ctl mod failure for fd " + std::to_string(fd));
             }
 
             void remove(int fd)
             {
                 callbacks_.erase(fd);
-                ::epoll_ctl(epoll_fd_.get(), EPOLL_CTL_DEL, fd, nullptr);
+                if (::epoll_ctl(epoll_fd_.get(), EPOLL_CTL_DEL, fd, nullptr) == -1)
+                {
+                    // if peer closes fd prematurely, kernel might automatically remove it
+                    // from epoll, causing ENOENT or EBADF
+                    if (errno != ENOENT && errno != EBADF)
+                        throw std::system_error(errno, std::generic_category(), "epoll_ctl DEL failure for fd " + std::to_string(fd));
+                }
             }
 
             void run()
@@ -72,7 +85,7 @@ namespace chronos::transport
                     if (num_events == -1)
                     {
                         if (errno == EINTR) continue;
-                        break;
+                        throw std::system_error(errno, std::generic_category(), "epoll_wait fatal error");
                     }
 
                     for(auto i{0}; i < num_events; ++i)
@@ -82,7 +95,11 @@ namespace chronos::transport
                         if (fd == wakeup_fd_.get())
                         {
                             uint64_t val{};
-                            ::read(wakeup_fd_.get(), &val, sizeof(val));
+                            if (::read(wakeup_fd_.get(), &val, sizeof(val)) == -1);
+                            {
+                                if (errno != EAGAIN && errno != EWOULDBLOCK)
+                                    throw std::system_error(errno, std::generic_category(), "failed to read eventfd wakeup token");
+                            }
                             continue;
                         }
 
@@ -95,7 +112,8 @@ namespace chronos::transport
                             if (events[i].events & EPOLLOUT) triggered |= EventFlags::Write;
                             if (events[i].events & (EPOLLERR | EPOLLHUP |EPOLLRDHUP)) triggered |= EventFlags::Error;
 
-                            it->second(fd, triggered);
+                            EventCallback cb = it->second; //copy std::function onto the stack before self-erasure
+                            cb(fd, triggered); //invoke stack copy
                         }
                     }
                 }
@@ -105,7 +123,11 @@ namespace chronos::transport
             {
                 running_ = false;
                 uint64_t val{1};
-                ::write(wakeup_fd_.get(), &val, sizeof(val));
+                if (::write(wakeup_fd_.get(), &val, sizeof(val)) == -1);
+                {
+                    if (errno != EAGAIN && errno != EWOULDBLOCK)
+                        throw std::system_error(errno, std::generic_category(), "failed to write eventfd stop token");
+                }
             }
         
         private:

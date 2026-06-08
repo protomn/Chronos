@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string>
 #if defined(__APPLE__) | defined(__FreeBSD__)
 
 #include "../socket.hpp"
@@ -11,6 +12,7 @@
 #include <unordered_map>
 #include <vector>
 #include <stdexcept>
+#include <system_error>
 
 //macOS / BSD specific headers
 #include <sys/types.h>
@@ -30,12 +32,14 @@ namespace chronos::transport
 
             KqueueLoop() : kq_(::kqueue())
             {
-                if (!kq_.isValid()) throw std::runtime_error("failed to create kqueue.");
+                if (!kq_.isValid()) throw std::system_error(errno, std::generic_category(), "failed to create kqueue instance");
 
                 //kqueue user-event to act as cross-thread wakeup signal
                 struct kevent wake_event{};
                 EV_SET(&wake_event, 0, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, nullptr);
-                ::kevent(kq_.get(), &wake_event, 1, nullptr, 0, nullptr);
+
+                if (::kevent(kq_.get(), &wake_event, 1, nullptr, 0, nullptr) == -1)
+                    std::system_error(errno, std::generic_category(), "failed to register kqueue user event.");
             }
 
             /**
@@ -44,8 +48,10 @@ namespace chronos::transport
 
             void add(int fd, EventFlags events, EventCallback cb)
             {
-                callbacks_[fd] = std::move(cb);
+                // maintains transactional safety by applying mod to kernel first
+                //if modify() throws due to a bad fd, callback is never committed to the map
                 modify(fd, events);
+                callbacks_[fd] = std::move(cb);
             }
 
             /**
@@ -55,6 +61,7 @@ namespace chronos::transport
             void modify(int fd, EventFlags events)
             {
                 std::vector<struct kevent> changes;
+                changes.reserve(2);
                 
                 if (isSet(events, EventFlags::Read))
                 {
@@ -82,7 +89,13 @@ namespace chronos::transport
                     changes.push_back(ev);
                 }
 
-                ::kevent(kq_.get(), changes.data(), static_cast<int>(changes.size()), nullptr, 0, nullptr);
+                if (::kevent(kq_.get(), changes.data(), static_cast<int>(changes.size()), nullptr, 0, nullptr) == -1)
+                {
+                    // when deleting a filter that wasn't previously active, kqueue may return ENOENT
+                    //suppresses that specific error, lets other real errors like EBADF pass through
+                    if (errno != ENOENT)
+                        throw std::system_error(errno, std::generic_category(), "kevent modify failed for fd " + std::to_string(fd));
+                }
             }
 
             /**
@@ -96,7 +109,12 @@ namespace chronos::transport
                 struct kevent changes[2];
                 EV_SET(&changes[0], fd, EVFILT_READ, EV_DELETE, 0, 0, nullptr);
                 EV_SET(&changes[1], fd, EVFILT_WRITE, EV_DELETE, 0, 0, nullptr);
-                ::kevent(kq_.get(), changes, 2, nullptr, 0, nullptr);
+
+                if (::kevent(kq_.get(), changes, 2, nullptr, 0, nullptr) == -1)
+                {
+                    if (errno != ENOENT && errno != EBADF)
+                        throw std::system_error(errno, std::generic_category(), "kevent remove failed for fd " + std::to_string(fd));
+                }
             }
 
             /**
@@ -115,7 +133,7 @@ namespace chronos::transport
                     if (num_events == -1)
                     {
                         if (errno == EINTR) continue;
-                        break;
+                        throw std::system_error(errno, std::generic_category(), "kevent wait fatal error");
                     }
 
                     for (auto i{0}; i < num_events; ++i)
@@ -135,7 +153,8 @@ namespace chronos::transport
                             if (ev.filter == EVFILT_WRITE) triggered_flags |= EventFlags::Write;
                             if (ev.flags & (EV_EOF | EV_ERROR)) triggered_flags |= EventFlags::Error;
 
-                            it->second(fd, triggered_flags);
+                            EventCallback cb = it->second; //copy std::function onto the stack before self-erasure
+                            cb(fd, triggered_flags); //invoke safe stack copy
                         }
                     }
                 }
@@ -147,7 +166,9 @@ namespace chronos::transport
 
                 struct kevent wake_event{};
                 EV_SET(&wake_event, 0, EVFILT_USER, 0, NOTE_TRIGGER, 0, nullptr);
-                ::kevent(kq_.get(), &wake_event, 1, nullptr, 0, nullptr);
+
+                if (::kevent(kq_.get(), &wake_event, 1, nullptr, 0, nullptr) == -1)
+                    throw std::system_error(errno, std::generic_category(), "failed to signal kqueue loop thread termination");
             }
 
         private:
