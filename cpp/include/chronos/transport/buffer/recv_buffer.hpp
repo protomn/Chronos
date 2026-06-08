@@ -71,10 +71,10 @@ namespace chronos::transport
 
             ssize_t fillFromSocket(int fd) noexcept
             {
-                const size_t max_read = ring_.writableContiguous();
-
                 //if stream is poisoned, refuse to read more data from the kernel
                 if (is_unrecoverable_) return -1;
+                
+                const size_t max_read = ring_.writableContiguous();
 
                 //if the buffer is completely full, more cannot be read at the moment
                 //app must extract frames to free up space
