@@ -4,8 +4,11 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
+#include <stdexcept>
 #include <span>
 
+#include <string>
 #include <sys/socket.h>
 #include <sys/types.h>
 
@@ -58,18 +61,33 @@ namespace chronos::transport
             }
 
             /**
-            * @brief stages encoded wire bytes into the bufferf
+            * @brief stages encoded wire bytes into the buffer
             * @param data - non-owning view of raw-bytes to enqueue
             * @return true if all bytes were enqueued, false if insufficient space
+            * @throws std::invalid_argument if Frame cannot fit within total buffer size
             */
 
-            bool enqueue(std::span<std::byte> data) noexcept
+            bool enqueue(std::span<const std::byte> data)
             {
+                //hard guard prevents permanent stall trap
+                //if the frame is physically bigger than the entire ring, it is impossible to ever send
+                if (data.size() > ring_.capacity())
+                    throw std::invalid_argument("oversized frame submitted to SendBuffer; frame size (" +
+                                                std::to_string(data.size()) + ") exceeds maximum capacity (" +
+                                                std::to_string(ring_.capacity()));
+
                 return ring_.write(data.data(), data.size());
             }
 
             /**
             * @brief flush stages bytes to kernel socket via zero-copy
+            * @note since the underlying storage is a circular buffer, the data that wraps 
+            * around the buffer boundary is non-contiguous. this method only flushes the first
+            * contiguous chunk per call.
+            * if wrap occurs under the level-triggered loop, the remaining tail will be picked up
+            * and cleared on the immediate next event loop iteration since EPOLLOUT/EVFILT_WRITE
+            * will remain asserted. if switching to an edge-triggered loop, this method must be 
+            * altered to loop until either the buffer is completely empty, or hits EAGAIN.
             * @param fd - socket file descriptor
             * @return ssize_t - bytes successfully send, -1 on error
             */
