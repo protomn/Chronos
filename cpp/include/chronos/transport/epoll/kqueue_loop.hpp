@@ -186,9 +186,15 @@ namespace chronos::transport
                                 EventCallback cb = it->second;
                                 cb(fd, triggered_flags);
                             }
+                            catch (const std::exception &e)
+                            {
+                                //route to background log buffer in prod, tbd later
+                                (void)e;
+                            }
                             catch(...)
                             {
-                                //route to bg log buffer in the future
+                                // increment telemetry counter 
+                                // log anonymous warning to log subsystem, tbd later in prod build
                             }
                         }
                     }
