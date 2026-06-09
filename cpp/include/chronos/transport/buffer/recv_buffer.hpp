@@ -152,6 +152,11 @@ namespace chronos::transport
                 return decode_result;
             }
 
+            [[nodiscard]] bool isFull() const noexcept
+            {
+                return ring_.writable() == 0;
+            }
+
         private:
 
             RingBuffer ring_;

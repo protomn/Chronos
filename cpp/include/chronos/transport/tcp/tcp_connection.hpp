@@ -59,10 +59,9 @@ namespace chronos::transport
             ssize_t receive() noexcept
             {
                 if (state_ != ConnectionState::Connected) return -1;
+                if (recv_buffer_.isFull()) return 0; //backpressure, not a disconnect
 
                 ssize_t bytes_read = recv_buffer_.fillFromSocket(socket_.get());
-
-                if (bytes_read == RecvBuffer::kBufferFull) return 0;
 
                 if (bytes_read == 0)
                 {
