@@ -37,7 +37,6 @@ namespace chronos::transport
 
             RingBuffer(const RingBuffer &) = delete;
             RingBuffer &operator=(const RingBuffer &) = delete;
-
             RingBuffer(RingBuffer &&) = default;
             RingBuffer &operator=(RingBuffer &&) noexcept = default;
 
@@ -181,7 +180,10 @@ namespace chronos::transport
             void commit(size_t len) noexcept
             {
                 assert(len <= writableContiguous() && "commit exceeds contiguous writable space");
-                write_posn_ += len;
+
+                //clamping advancement for release build, prevents ring corruption
+                const size_t adv = std::min(len, writableContiguous());
+                write_posn_ += adv;
             }
 
             [[nodiscard]] size_t capacity() const noexcept
