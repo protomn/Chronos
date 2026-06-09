@@ -7,12 +7,23 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <vector>
 #include <cassert>
 #include <limits>
 
 namespace chronos::protocol
 {
+    /**
+    * @brief serialization failure conditions
+    */
+
+    enum class SerializerError : uint8_t
+    {
+        MethodNameTooLong,
+        ErrorMessageTooLong
+    };
+
     /**
     * @brief translate request and response objects into wire-ready
     * Frame objects using length-prefixed binary layout
@@ -30,8 +41,14 @@ namespace chronos::protocol
             * format: [2 bytes: method name len][N bytes: method name][remaining: payload]
             */
 
-            [[nodiscard]] static Frame serialize(const Request &req)
+            [[nodiscard]] static std::expected<Frame, SerializerError> serialize(const Request &req)
             {
+                //runtime check
+                if (req.method.size() > std::numeric_limits<uint16_t>::max())
+                    return std::unexpected(SerializerError::MethodNameTooLong);
+
+                const uint16_t method_len = static_cast<uint16_t>(req.method.size());
+
                 Frame frame;
                 frame.header.frame_type = FrameType::Request;
                 frame.header.frame_flags = req.message.flags;
@@ -39,8 +56,6 @@ namespace chronos::protocol
 
                 assert(req.method.size() <= std::numeric_limits<uint16_t>::max()
                        && "method name exceeds maximum encodable length");
-
-                const uint16_t method_len = static_cast<uint16_t>(req.method.size());
 
                 // buffer pre-allocation to exact size
                 std::vector<std::byte> payload;
@@ -66,16 +81,20 @@ namespace chronos::protocol
             * format: [1 byte: status code][2 bytes: error msg len][N bytes: error msg][remaining: payload]
             */
 
-            [[nodiscard]] static Frame serialize(const Response &resp)
+            [[nodiscard]] static std::expected<Frame, SerializerError> serialize(const Response &resp)
             {
-                Frame frame;
-                frame.header.frame_type = resp.hasSucceeded() ? FrameType::Response : FrameType::Error;
-                frame.header.frame_flags = resp.message.flags;
-                frame.header.request_id = resp.message.id.raw();
+                //runtime check
+                if(resp.error_msg.has_value() && (resp.error_msg->size() > std::numeric_limits<uint16_t>::max()))
+                    return std::unexpected(SerializerError::ErrorMessageTooLong);
 
                 const uint16_t err_len = resp.error_msg.has_value()
                                          ? static_cast<uint16_t>(resp.error_msg->size())
                                          : 0;
+
+                Frame frame;
+                frame.header.frame_type = resp.hasSucceeded() ? FrameType::Response : FrameType::Error;
+                frame.header.frame_flags = resp.message.flags;
+                frame.header.request_id = resp.message.id.raw();
 
                 // buffer pre-allocation to exact size
                 std::vector<std::byte> payload;
