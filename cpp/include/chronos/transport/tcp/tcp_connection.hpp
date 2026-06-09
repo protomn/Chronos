@@ -123,6 +123,7 @@ namespace chronos::transport
             /**
             * @brief attempt to extract a complete frame from buffered receive stream
             * post extraction buffer health eval, updates if fatal violation has occured
+            * catches protocol desync err
             */
 
             [[nodiscard]] std::optional<std::expected<protocol::Frame, protocol::DecodeError>> tryExtractFrame()

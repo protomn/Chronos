@@ -118,15 +118,14 @@ namespace chronos::transport
                 //drop the connection if a single frame exceeds buffer capacity
                 if (total_frame_size > ring_.capacity())
                 {
-                    is_unrecoverable_ = true;
-
-                    //drains all buffered bytes to prevent stale data from being re-read
-                    ring_.skip(ring_.readable());
+                    poisonedStream();
                     return std::unexpected(protocol::DecodeError::PayloadLengthMismatch);
                 }
 
                 if (ring_.readable() < total_frame_size)
                     return std::nullopt;
+
+                std::expected<protocol::Frame, protocol::DecodeError> decode_result;
 
                 if (total_frame_size <= ring_.readableContiguous())
                 {
@@ -136,19 +135,23 @@ namespace chronos::transport
                     //Frame's vector
                     //then consume bytes from ring buffer once processing's finished
                     std::span<const std::byte> frame_view(ring_.readableData(), total_frame_size);
-                    auto decode_result = protocol::FrameDecoder::decode(frame_view);
-                    ring_.skip(total_frame_size);
-                    return decode_result;
+                    decode_result = protocol::FrameDecoder::decode(frame_view);
                 }
-                
-                //cold path
-                //extract full frame into contiguous buffer for the decoder
-                std::vector<std::byte> frame_data(total_frame_size); //frame straddles the circular wrap around boundary
-
-                if (!ring_.peek(frame_data.data(), total_frame_size)) return std::nullopt;
-                    
-                auto decode_result = protocol::FrameDecoder::decode(frame_data);
+                else
+                {
+                    //cold path
+                    //extract full frame into contiguous buffer for the decoder
+                    std::vector<std::byte> frame_data(total_frame_size); //frame straddles the circular wrap around boundary
+                    if (!ring_.peek(frame_data.data(), total_frame_size)) return std::nullopt;
+                    decode_result = protocol::FrameDecoder::decode(frame_data);
+                }
                 ring_.skip(total_frame_size);
+                
+                //any decoding failure means protocol desync
+                //byte stream alignment is permanently lost, poison the stream immediately
+                if (!decode_result.has_value())
+                    poisonedStream();
+
                 return decode_result;
             }
 
@@ -158,6 +161,12 @@ namespace chronos::transport
             }
 
         private:
+
+            void poisonedStream() noexcept
+            {
+                is_unrecoverable_ = true;
+                ring_.skip(ring_.readable()); //drains remaining garbage to prevent stale re-reads
+            }
 
             RingBuffer ring_;
             bool is_unrecoverable_{false};
