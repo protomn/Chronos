@@ -62,8 +62,11 @@ namespace chronos::transport
 
                 ssize_t bytes_read = recv_buffer_.fillFromSocket(socket_.get());
 
+                if (bytes_read == RecvBuffer::kBufferFull) return 0;
+
                 if (bytes_read == 0)
                 {
+                    //orderly peer EOF shutdown
                     state_ = ConnectionState::Closed;
                     return 0;
                 }

@@ -32,6 +32,9 @@ namespace chronos::transport
     {
         public:
 
+            //an explicit sentinel to separate backpressure full-state from orderly EOF (0)
+            static constexpr ssize_t kBufferFull = -2;
+
             /**
             * @brief constructs a new receive buffer
             * @param capacity - total buffer size in bytes, defaults to 64KB
@@ -73,12 +76,12 @@ namespace chronos::transport
             {
                 //if stream is poisoned, refuse to read more data from the kernel
                 if (is_unrecoverable_) return -1;
-                
+
                 const size_t max_read = ring_.writableContiguous();
 
                 //if the buffer is completely full, more cannot be read at the moment
                 //app must extract frames to free up space
-                if (max_read == 0) return 0;
+                if (max_read == 0) return kBufferFull;
 
                 //zero-copy into buffer's backing memory
                 ssize_t bytes_received = ::recv(fd, ring_.writableData(), max_read, 0);
