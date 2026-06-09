@@ -7,10 +7,12 @@
 
 #include <atomic>
 #include <cstdint>
+#include <expected>
 #include <functional>
 #include <unordered_map>
 #include <vector>
 #include <stdexcept>
+#include <string>
 #include <system_error>
 
 #include <sys/epoll.h>
@@ -73,7 +75,12 @@ namespace chronos::transport
                 }
             }
 
-            void run()
+            /**
+            * @brief background event loop driver
+            * @return std::expected containing void on clean exit, error_code on failure
+            */
+
+            [[nodiscard]] std::expected<void, std::error_code> run() noexcept
             {
                 running_ = true;
                 std::vector<struct epoll_event> events(64);
@@ -85,7 +92,7 @@ namespace chronos::transport
                     if (num_events == -1)
                     {
                         if (errno == EINTR) continue;
-                        throw std::system_error(errno, std::generic_category(), "epoll_wait fatal error");
+                        return std::unexpected(std::error_code(errno, std::generic_category()));
                     }
 
                     for(auto i{0}; i < num_events; ++i)
@@ -98,7 +105,7 @@ namespace chronos::transport
                             if (::read(wakeup_fd_.get(), &val, sizeof(val)) == -1)
                             {
                                 if (errno != EAGAIN && errno != EWOULDBLOCK)
-                                    throw std::system_error(errno, std::generic_category(), "failed to read eventfd wakeup token");
+                                    return std::unexpected(std::error_code(errno, std::generic_category()));
                             }
                             continue;
                         }
@@ -113,17 +120,31 @@ namespace chronos::transport
                             if (events[i].events & (EPOLLERR | EPOLLHUP |EPOLLRDHUP)) triggered |= EventFlags::Error;
 
                             EventCallback cb = it->second; //copy std::function onto the stack before self-erasure
-                            cb(fd, triggered); //invoke stack copy
+                            try
+                            {
+                                cb(fd, triggered); //invoke stack copy
+                            }
+                            catch (const std::exception &e)
+                            {
+                                //route to background log buffer in prod, tbd later
+                                (void)e;
+                            }
+                            catch(...)
+                            {
+                                // increment telemetry counter 
+                                // log anonymous warning to log subsystem, tbd later in prod build
+                            }
                         }
                     }
                 }
+                return {};
             }
 
             void stop()
             {
                 running_ = false;
                 uint64_t val{1};
-                if (::write(wakeup_fd_.get(), &val, sizeof(val)) == -1);
+                if (::write(wakeup_fd_.get(), &val, sizeof(val)) == -1)
                 {
                     if (errno != EAGAIN && errno != EWOULDBLOCK)
                         throw std::system_error(errno, std::generic_category(), "failed to write eventfd stop token");

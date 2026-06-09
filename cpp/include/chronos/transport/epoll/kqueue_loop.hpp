@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <expected>
 #include <functional>
 #include <unordered_map>
 #include <vector>
@@ -121,7 +122,7 @@ namespace chronos::transport
             * @brief blocks current thread waiting for dispatching i/o events
             */
 
-            void run()
+            [[nodiscard]] std::expected<void, std::error_code> run() noexcept
             {
                 running_ = true;
                 std::vector<struct kevent> events(64);
@@ -133,8 +134,10 @@ namespace chronos::transport
                     if (num_events == -1)
                     {
                         if (errno == EINTR) continue;
-                        throw std::system_error(errno, std::generic_category(), "kevent wait fatal error");
+                        return std::unexpected(std::error_code(errno, std::generic_category()));
                     }
+
+                    ready_batch_.clear();
 
                     for (auto i{0}; i < num_events; ++i)
                     {
@@ -143,21 +146,49 @@ namespace chronos::transport
                         if (ev.filter == EVFILT_USER) continue; //thread wakeup signal (stop() was called)
 
                         int fd = static_cast<int>(ev.ident);
-                        auto it = callbacks_.find(fd);
 
+                        EventFlags triggered_flags{EventFlags::None};
+
+                        if (ev.filter == EVFILT_READ) triggered_flags |= EventFlags::Read;
+                        if (ev.filter == EVFILT_WRITE) triggered_flags |= EventFlags::Write;
+                        if (ev.flags & (EV_EOF | EV_ERROR)) triggered_flags |= EventFlags::Error;
+
+                        //linear scan - avoid map allocations for N <= 64
+                        bool found{false};
+                        for (auto &pair : ready_batch_)
+                        {
+                            if (pair.first == fd)
+                            {
+                                pair.second |= triggered_flags;
+                                found = true;
+                                break;
+                            }
+                        }
+
+                        if (!found)
+                        {
+                            ready_batch_.push_back({fd, triggered_flags});
+                        }
+                    }
+
+                    for (const auto &[fd, triggered_flags] : ready_batch_)
+                    {
+                        auto it = callbacks_.find(fd);
                         if (it != callbacks_.end())
                         {
-                            EventFlags triggered_flags{EventFlags::None};
-
-                            if (ev.filter == EVFILT_READ) triggered_flags |= EventFlags::Read;
-                            if (ev.filter == EVFILT_WRITE) triggered_flags |= EventFlags::Write;
-                            if (ev.flags & (EV_EOF | EV_ERROR)) triggered_flags |= EventFlags::Error;
-
-                            EventCallback cb = it->second; //copy std::function onto the stack before self-erasure
-                            cb(fd, triggered_flags); //invoke safe stack copy
+                            try
+                            {
+                                EventCallback cb = it->second;
+                                cb(fd, triggered_flags);
+                            }
+                            catch(...)
+                            {
+                                //route to bg log buffer in the future
+                            }
                         }
                     }
                 }
+                return {};
             }
 
             void stop()
@@ -176,6 +207,7 @@ namespace chronos::transport
             Socket kq_;
             std::atomic<bool> running_{false};
             std::unordered_map<int, EventCallback> callbacks_;
+            std::vector<std::pair<int, EventFlags>> ready_batch_; //buffer coalescing
     };
 } //namespace chronos::transport
 #endif //defined(__APPLE__) | defined(__FreeBSD__)
