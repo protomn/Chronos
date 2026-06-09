@@ -49,6 +49,11 @@ namespace chronos::transport
 
             void add(int fd, EventFlags events, EventCallback cb)
             {
+                //enforce epoll's EEXIST contract in user-space
+                //EV_ADD is upsert in kqueue, manually prevent double-adds
+                if (callbacks_.contains(fd)) 
+                    throw std::system_error(EEXIST, std::generic_category(), "kqueue add failure: fd " + std::to_string(fd) + " already exists");
+
                 // maintains transactional safety by applying mod to kernel first
                 //if modify() throws due to a bad fd, callback is never committed to the map
                 modify(fd, events);
