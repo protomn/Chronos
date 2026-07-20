@@ -1,7 +1,6 @@
 #pragma once
 
-#include <string>
-#if defined(__APPLE__) | defined(__FreeBSD__)
+#if defined(__APPLE__) || defined(__FreeBSD__)
 
 #include "../socket.hpp"
 #include "event_types.hpp"
@@ -10,9 +9,9 @@
 #include <cstdint>
 #include <expected>
 #include <functional>
-#include <unordered_map>
 #include <vector>
 #include <stdexcept>
+#include <string>
 #include <system_error>
 
 //macOS / BSD specific headers
@@ -41,6 +40,8 @@ namespace chronos::transport
 
                 if (::kevent(kq_.get(), &wake_event, 1, nullptr, 0, nullptr) == -1)
                     throw std::system_error(errno, std::generic_category(), "failed to register kqueue user event.");
+
+                ready_batch_.reserve(64); //keeps noexcept run() loop steady in allocation free ss
             }
 
             /**
@@ -49,9 +50,15 @@ namespace chronos::transport
 
             void add(int fd, EventFlags events, EventCallback cb)
             {
+
+                if (fd < 0) throw std::invalid_argument("invalid file descriptor");
+
                 //enforce epoll's EEXIST contract in user-space
                 //EV_ADD is upsert in kqueue, manually prevent double-adds
-                if (callbacks_.contains(fd)) 
+                if (static_cast<size_t>(fd) >= callbacks_.size())
+                    callbacks_.resize(fd + 1); 
+                
+                if (callbacks_[fd])
                     throw std::system_error(EEXIST, std::generic_category(), "kqueue add failure: fd " + std::to_string(fd) + " already exists");
 
                 // maintains transactional safety by applying mod to kernel first
@@ -110,7 +117,6 @@ namespace chronos::transport
 
             void remove(int fd)
             {
-                callbacks_.erase(fd);
 
                 struct kevent changes[2];
                 EV_SET(&changes[0], fd, EVFILT_READ, EV_DELETE, 0, 0, nullptr);
@@ -121,6 +127,9 @@ namespace chronos::transport
                     if (errno != ENOENT && errno != EBADF)
                         throw std::system_error(errno, std::generic_category(), "kevent remove failed for fd " + std::to_string(fd));
                 }
+
+                if (fd >= 0 && static_cast<size_t>(fd) < callbacks_.size() && callbacks_[fd])
+                    callbacks_[fd] = nullptr; // only invoked on success or suppressed errno
             }
 
             /**
@@ -178,25 +187,24 @@ namespace chronos::transport
 
                     for (const auto &[fd, triggered_flags] : ready_batch_)
                     {
-                        auto it = callbacks_.find(fd);
-                        if (it != callbacks_.end())
-                        {
-                            try
+                        if (fd >= 0 && static_cast<size_t>(fd) < callbacks_.size() && callbacks_[fd])
                             {
-                                EventCallback cb = it->second;
-                                cb(fd, triggered_flags);
+                                try
+                                {
+                                    EventCallback cb = callbacks_[fd];
+                                    cb(fd, triggered_flags);
+                                }
+                                catch (const std::exception &e)
+                                {
+                                    //route to background log buffer in prod, tbd later
+                                    (void)e;
+                                }
+                                catch(...)
+                                {
+                                    // increment telemetry counter 
+                                    // log anonymous warning to log subsystem, tbd later in prod build
+                                }
                             }
-                            catch (const std::exception &e)
-                            {
-                                //route to background log buffer in prod, tbd later
-                                (void)e;
-                            }
-                            catch(...)
-                            {
-                                // increment telemetry counter 
-                                // log anonymous warning to log subsystem, tbd later in prod build
-                            }
-                        }
                     }
                 }
                 return {};
@@ -217,8 +225,12 @@ namespace chronos::transport
 
             Socket kq_;
             std::atomic<bool> running_{false};
-            std::unordered_map<int, EventCallback> callbacks_;
+            std::vector<EventCallback> callbacks_;
+
+            // kqueue delivers READ and WRITE as separate events for the same
+            // fd, unlike epoll, which merges them into a single bitmask
+            // coalescing before dispatch means callback fires once per fd per tick
             std::vector<std::pair<int, EventFlags>> ready_batch_; //buffer coalescing
     };
 } //namespace chronos::transport
-#endif //defined(__APPLE__) | defined(__FreeBSD__)
+#endif //defined(__APPLE__) || defined(__FreeBSD__)

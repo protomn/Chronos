@@ -45,6 +45,15 @@ namespace chronos::transport
 
             void add(int fd, EventFlags events, EventCallback cb)
             {
+                if (fd < 0) throw std::invalid_argument("invalid file descriptor");
+
+                //flat-vector resize on demand to accomodate fd index
+                if (static_cast<size_t>(fd) >= callbacks_.size())
+                    callbacks_.resize(fd + 1);
+                
+                if (callbacks_[fd])
+                    throw std::system_error(EEXIST, std::generic_category(), "epoll add failure: fd " + std::to_string(fd) + " already exists");
+
                 struct epoll_event ev{};
                 ev.events = mapFlags(events);
                 ev.data.fd = fd;
@@ -65,7 +74,9 @@ namespace chronos::transport
 
             void remove(int fd)
             {
-                callbacks_.erase(fd);
+                if (fd >= 0 && static_cast<size_t>(fd) < callbacks_.size())
+                    callbacks_[fd] = nullptr;
+
                 if (::epoll_ctl(epoll_fd_.get(), EPOLL_CTL_DEL, fd, nullptr) == -1)
                 {
                     // if peer closes fd prematurely, kernel might automatically remove it
@@ -110,16 +121,15 @@ namespace chronos::transport
                             continue;
                         }
 
-                        //network event dispatch
-                        auto it = callbacks_.find(fd);
-                        if (it != callbacks_.end())
+                        if (fd >= 0 && static_cast<size_t>(fd) < callbacks_.size() && callbacks_[fd])
                         {
                             EventFlags triggered = EventFlags::None;
                             if (events[i].events & EPOLLIN) triggered |= EventFlags::Read;
                             if (events[i].events & EPOLLOUT) triggered |= EventFlags::Write;
                             if (events[i].events & (EPOLLERR | EPOLLHUP |EPOLLRDHUP)) triggered |= EventFlags::Error;
 
-                            EventCallback cb = it->second; //copy std::function onto the stack before self-erasure
+                            EventCallback cb = callbacks_[fd]; //stack copy survives remove()/resize()
+
                             try
                             {
                                 cb(fd, triggered); //invoke stack copy
@@ -156,14 +166,14 @@ namespace chronos::transport
             Socket epoll_fd_;
             Socket wakeup_fd_;
             std::atomic<bool> running_{false};
-            std::unordered_map<int, EventCallback> callbacks_;
+            std::vector<EventCallback> callbacks_;
 
             static uint32_t mapFlags(EventFlags flags)
             {
                 uint32_t epoll_events{0};
                 if (isSet(flags, EventFlags::Read)) epoll_events |= EPOLLIN;
                 if (isSet(flags, EventFlags::Write)) epoll_events |= EPOLLOUT;
-                return epoll_events | EPOLLRDHUP; //watch for peer disconnect
+                return epoll_events | EPOLLRDHUP; // watch for peer disconnect
             }
     };
 } //namespace chronos::transport
