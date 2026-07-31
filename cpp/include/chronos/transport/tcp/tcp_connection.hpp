@@ -87,6 +87,8 @@ namespace chronos::transport
             * @brief encodes a frame and stages its bytes in the send buffer
             * @param frame - the protocol-level frame to send
             * @return true if successfully staged, false if send buffer is full (backpressure)
+            * @throws std::length_error if the payload exceeds kMaxPayloadSize
+            * @throws std::bad_alloc if the send buffer must grow and allocation fails
             */
 
             [[nodiscard]] bool send(const protocol::Frame &frame)
@@ -117,6 +119,8 @@ namespace chronos::transport
                     return -1;
                 }
 
+                shutdownIfDrained();
+
                 return bytes_sent;
             }
 
@@ -142,15 +146,9 @@ namespace chronos::transport
 
             void close() noexcept
             {
-                if (state_ == ConnectionState::Connected)
-                {
-                    /*
-                    * SHUT_WR send a TCP FIN packet, closing the write half of the connection
-                    * underlying fd remains open until socket destructor runs
-                    */
-                    ::shutdown(socket_.get(), SHUT_WR);
-                    state_ = ConnectionState::Closing;
-                }
+                if (state_ != ConnectionState::Connected) return;
+                state_ = ConnectionState::Closing;
+                shutdownIfDrained(); // to fire immediately if nothing is pending
             }
 
             /**
@@ -182,9 +180,25 @@ namespace chronos::transport
 
         private:
 
+            //TODO: runtime-lvl drain timeout; send buffer never empties and FIN packet is never
+            //sent if a peer never reads, leaves the connection stuck.
+            void shutdownIfDrained() noexcept 
+            {   
+                if (state_ == ConnectionState::Closing && send_buffer_.empty() && !fin_sent_)
+                {
+                    /*
+                    * SHUT_WR send a TCP FIN packet, closing the write half of the connection
+                    * underlying fd remains open until socket destructor runs
+                    */
+                    ::shutdown(socket_.get(), SHUT_WR);
+                    fin_sent_ = true;
+                }
+            }
+
             Socket socket_;
             RecvBuffer recv_buffer_;
             SendBuffer send_buffer_;
             ConnectionState state_;
+            bool fin_sent_{false};
     };
 } //namespace chronos::transport
