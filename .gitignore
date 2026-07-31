@@ -75,3 +75,5 @@ __pycache__/
 *.pyc
 *.egg-info/
 .DS_Store
+
+work.md
