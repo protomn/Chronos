@@ -14,6 +14,9 @@ namespace chronos::protocol
     inline constexpr size_t kHeaderSize{20};
     static_assert(kHeaderSize == 20, "Wire header contract must be exactly 20-bytes.");
 
+    /// @brief: max total frame size on the wire
+    inline constexpr size_t kMaxFrameSize{kMaxPayloadSize + kHeaderSize};
+
     ///@brief defines the administrative intent of the frame
     enum class FrameType : uint8_t
     {

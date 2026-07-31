@@ -18,6 +18,11 @@ namespace chronos::transport
     * ever-increasing read/write counters to track state
     */
 
+    /// @brief default allocation for the transport buffers
+    /// buffers are to grow on demand up to protocol::kMaxFrameSize
+    /// message size limit is protocol::kMaxPayloadSize
+    inline constexpr size_t kDefBufferCap{65536};
+
     class RingBuffer
     {
         public:
@@ -74,9 +79,7 @@ namespace chronos::transport
                 std::memcpy(buffer_.data() + offset, data, first_chunk);
 
                 if (first_chunk < len)
-                {
                     std::memcpy(buffer_.data(), data + first_chunk, len - first_chunk);
-                }
 
                 write_posn_ += len;
                 return true;
@@ -99,6 +102,38 @@ namespace chronos::transport
                 if (first_chunk < len) std::memcpy(dest + first_chunk, buffer_.data(), len - first_chunk);
 
                 return true;
+            }
+
+            /**
+            * @brief growth path for buffer on demand, buffer defaults to something small (64KiB)
+            */
+
+            void grow(size_t min_capacity)
+            {
+                if (min_capacity <= capacity_) return;
+
+                size_t new_capacity{std::bit_ceil(min_capacity)};
+
+                std::vector<std::byte> new_buffer(new_capacity);
+
+                const size_t count = readable();
+
+                if (count > 0)
+                {
+                    const size_t offset{read_posn_ & mask_};
+                    const size_t first_chunk{std::min(count, capacity_ - offset)};
+
+                    std::memcpy(new_buffer.data(), buffer_.data() + offset, first_chunk);
+
+                    if (first_chunk < count) std::memcpy(new_buffer.data() + first_chunk, buffer_.data(), count - first_chunk);
+                }
+
+                buffer_ = std::move(new_buffer);
+
+                capacity_ = new_capacity;
+                mask_ = capacity_ - 1;
+                read_posn_ = 0;
+                write_posn_ = count;
             }
 
             /**

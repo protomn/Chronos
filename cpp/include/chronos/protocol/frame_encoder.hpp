@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <concepts>
+#include <stdexcept>
 #include <vector>
 
 namespace chronos::protocol
@@ -24,6 +25,11 @@ namespace chronos::protocol
             
             [[nodiscard]] static std::vector<std::byte> encode(const Frame &frame)
             {
+                if (frame.payload.size() > kMaxPayloadSize)
+                    throw std::length_error("frame payload exceeds kMaxPayloadSize");
+                //note: encode currently can't throw, but this makes it able to - fine for now,
+                //only in the send path, not the hot recieve loop
+
                 std::vector<std::byte> buffer;
 
                 const size_t total_size = kHeaderSize + frame.payload.size();

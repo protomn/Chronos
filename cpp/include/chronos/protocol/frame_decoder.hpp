@@ -20,7 +20,8 @@ namespace chronos::protocol
         InvalidMagic,
         IncompatibleVersion,
         UnknownFrameType,
-        PayloadLengthMismatch
+        PayloadLengthMismatch,
+        PayloadTooLarge
     };
 
     class FrameDecoder
@@ -78,10 +79,12 @@ namespace chronos::protocol
                 const uint64_t decoded_request_id = readBigEndian<uint64_t>(buffer.data() + 8);
                 const uint32_t decoded_payload_len = readBigEndian<uint32_t>(buffer.data() + 16);
 
+                if (decoded_payload_len > kMaxPayloadSize)
+                    return std::unexpected(DecodeError::PayloadTooLarge);
+
                 if (buffer.size() != kHeaderSize + decoded_payload_len)
-                {
                     return std::unexpected(DecodeError::PayloadLengthMismatch);
-                }
+
 
                 Frame frame;
                 frame.header.magic = decoded_magic;

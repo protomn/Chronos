@@ -1,5 +1,6 @@
 #pragma once
 
+#include "chronos/protocol/frame.hpp"
 #include "ring_buffer.hpp"
 
 #include <cstddef>
@@ -32,9 +33,9 @@ namespace chronos::transport
 
             /**
             * @brief constructor
-            * @param capacity - total buffer size in bytes, defaults to 64KB
+            * @param initial_capacity - total buffer size in bytes, defaults to 64KB
             */
-            explicit SendBuffer(size_t capacity = 65536) : ring_(capacity) {}
+            explicit SendBuffer(size_t initial_capacity = kDefBufferCap) : ring_(initial_capacity) {}
 
             //move-only
             SendBuffer(const SendBuffer&) = delete;
@@ -68,12 +69,11 @@ namespace chronos::transport
 
             bool enqueue(std::span<const std::byte> data)
             {
-                //hard guard prevents permanent stall trap
-                //if the frame is physically bigger than the entire ring, it is impossible to ever send
+                assert(data.size() <= protocol::kMaxFrameSize && "bounded by FrameEncoder");
+                
+                //if the frame is physically bigger than the entire ring, grow the ring to the required size
                 if (data.size() > ring_.capacity())
-                    throw std::invalid_argument("oversized frame submitted to SendBuffer; frame size (" +
-                                                std::to_string(data.size()) + ") exceeds maximum capacity " +
-                                                std::to_string(ring_.capacity()));
+                    ring_.grow(data.size());
 
                 return ring_.write(data.data(), data.size());
             }

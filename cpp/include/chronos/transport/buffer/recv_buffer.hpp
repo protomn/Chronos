@@ -3,6 +3,7 @@
 //receive buffer
 //wraps the ring buffer and sits b/w the kernel socket and protocol layer
 
+#include "chronos/protocol/protocol_version.hpp"
 #include "ring_buffer.hpp"
 #include "../../protocol/frame.hpp"
 #include "../../protocol/frame_decoder.hpp"
@@ -37,10 +38,10 @@ namespace chronos::transport
 
             /**
             * @brief constructs a new receive buffer
-            * @param capacity - total buffer size in bytes, defaults to 64KB
+            * @param initial_capacity - total buffer size in bytes, defaults to 64KB
             */
 
-            explicit RecvBuffer(size_t capacity = 65536) : ring_(capacity) {}
+            explicit RecvBuffer(size_t initial_capacity = kDefBufferCap) : ring_(initial_capacity) {}
 
             //move only semantics
             RecvBuffer(const RecvBuffer &) = delete;
@@ -116,11 +117,13 @@ namespace chronos::transport
                 const size_t total_frame_size = protocol::kHeaderSize + payload_length;
 
                 //drop the connection if a single frame exceeds buffer capacity
-                if (total_frame_size > ring_.capacity())
+                if (payload_length > protocol::kMaxPayloadSize)
                 {
                     poisonedStream();
-                    return std::unexpected(protocol::DecodeError::PayloadLengthMismatch);
+                    return std::unexpected(protocol::DecodeError::PayloadTooLarge);
                 }
+
+                if (total_frame_size > ring_.capacity()) ring_.grow(total_frame_size);
 
                 if (ring_.readable() < total_frame_size)
                     return std::nullopt;

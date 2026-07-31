@@ -5,7 +5,7 @@
 
 namespace chronos::protocol
 {
-    /// @brief: magic bytes to identifies a valid chronos frame ('C', 'H')
+    /// @brief: magic bytes to identify a valid chronos frame ('C', 'H')
     inline constexpr std::array<uint8_t, 2> kMagicBytes = {0x43, 0x48};
 
     /// @brief: current wire protocol version of this implementation
@@ -14,8 +14,12 @@ namespace chronos::protocol
     /// @brief: lowest wire protocol version this implemetation can safely understand
     inline constexpr uint8_t kMinCompatibleVersion{1};
 
+    /// @brief: max allowed payload size in bytes (4 MiB)
+    /// excludes 20-byte frame header
+    inline constexpr uint32_t kMaxPayloadSize{4 * 1024 * 1024};
+
     /**
-    * @brief: Check is a remote protocol version is compatible with this implementation
+    * @brief: Check if a remote protocol version is compatible with this implementation
     * A remote version is compatible if it is at least as high as the minimum compatible
     * version, and does not exceed the current version (unless forward compatibility is
     * supported, tbd later).
